@@ -31,3 +31,9 @@ Baseline: upstream v0.8.7 (tag `v0.8.7`, commit 9670e1c).
 - [x] ~~Expose the recv/ack path for an external chunked sender~~ — not needed:
       the fix lives inside `Batch::send()`, which already has crate-internal recv
       access. No public API change required.
+- [x] `Hook`: add a `dev` field (NFTA_HOOK_DEV) plus a `Hook::netdev_ingress(dev,
+      priority)` constructor, so netdev-family chains can bind to a device.
+      `HookClass` only covers the NF_INET_* hooks, so the NF_NETDEV_INGRESS
+      hooknum (0) is set directly; `priority` is the signed NFTA_HOOK_PRIORITY
+      bit-pattern (e.g. -500). Verified: full netdev/ingress table + chain + sets
+      + `ip saddr @set drop` rules install atomically on a 6.x kernel.

@@ -5,7 +5,8 @@ use crate::error::{DecodeError, QueryError};
 use crate::nlmsg::{NfNetlinkAttribute, NfNetlinkDeserializable, NfNetlinkObject};
 use crate::sys::{
     NFTA_CHAIN_FLAGS, NFTA_CHAIN_HOOK, NFTA_CHAIN_NAME, NFTA_CHAIN_POLICY, NFTA_CHAIN_TABLE,
-    NFTA_CHAIN_TYPE, NFTA_HOOK_HOOKNUM, NFTA_HOOK_PRIORITY, NFT_MSG_DELCHAIN, NFT_MSG_NEWCHAIN,
+    NFTA_CHAIN_TYPE, NFTA_HOOK_DEV, NFTA_HOOK_HOOKNUM, NFTA_HOOK_PRIORITY, NFT_MSG_DELCHAIN,
+    NFT_MSG_NEWCHAIN,
 };
 use crate::{Batch, ProtocolFamily, Table};
 use std::fmt::Debug;
@@ -36,6 +37,10 @@ pub struct Hook {
     class: u32,
     #[field(NFTA_HOOK_PRIORITY)]
     priority: u32,
+    /// Fork change 2026-06-19: device a netdev-family chain hooks on
+    /// (NFTA_HOOK_DEV). Required for `hook ingress`/`hook egress` chains.
+    #[field(NFTA_HOOK_DEV)]
+    dev: String,
 }
 
 impl Hook {
@@ -43,6 +48,20 @@ impl Hook {
         Hook::default()
             .with_class(class as u32)
             .with_priority(priority as u32)
+    }
+
+    /**
+    Fork change 2026-06-19: build a netdev ingress hook bound to `dev`.
+    `priority` is signed (e.g. -500); it is stored as the NFTA_HOOK_PRIORITY
+    s32 bit-pattern. HookClass has no Ingress variant (those are the
+    NF_NETDEV_* hooks, not NF_INET_*), so the hooknum is set directly.
+    */
+    pub fn netdev_ingress(dev: impl Into<String>, priority: i32) -> Self {
+        const NF_NETDEV_INGRESS: u32 = 0;
+        Hook::default()
+            .with_class(NF_NETDEV_INGRESS)
+            .with_priority(priority as u32)
+            .with_dev(dev.into())
     }
 }
 
