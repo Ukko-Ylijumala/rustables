@@ -10,7 +10,8 @@ use crate::sys::{NFNL_SUBSYS_NFTABLES, NLM_F_ACK};
 use crate::{MsgType, ProtocolFamily};
 
 use nix::sys::socket::{
-    self, AddressFamily, MsgFlags, NetlinkAddr, SockFlag, SockProtocol, SockType,
+    self, sockopt, setsockopt, AddressFamily, MsgFlags, NetlinkAddr, SockFlag, SockProtocol,
+    SockType,
 };
 
 /// Error while communicating with netlink.
@@ -110,6 +111,20 @@ impl Batch {
         socket::bind(sock.as_raw_fd(), &addr).map_err(|_| QueryError::BindFailed)?;
 
         let to_send = self.finalize();
+
+        /*
+        Fork change 2026-06-19: a netfilter batch must reach the kernel as a
+        single datagram, but netlink_sendmsg() rejects it with EMSGSIZE when
+        its length exceeds `sk_sndbuf - 32`. The default send buffer caps large
+        atomic transactions (hundreds of thousands of set elements) at a few
+        hundred KB. Raise the send buffer to fit this batch with headroom;
+        SndBufForce bypasses net.core.wmem_max and needs CAP_NET_ADMIN, which
+        any ruleset-mutating program already holds. Best-effort: if it fails
+        we still try to send (small batches go through unchanged).
+        */
+        let want = to_send.len() + (1 << 16);
+        let _ = setsockopt(&sock, sockopt::SndBufForce, &want);
+
         let mut sent = 0;
         while sent != to_send.len() {
             sent += socket::send(sock.as_raw_fd(), &to_send[sent..], MsgFlags::empty())

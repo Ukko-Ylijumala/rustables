@@ -21,9 +21,13 @@ Baseline: upstream v0.8.7 (tag `v0.8.7`, commit 9670e1c).
       adds a timed host element. Verified against a 6.x kernel with ranges + TTLs.
       NB: `KEY_END` is concat/pipapo-only — rbtree interval sets reject it
       (EINVAL), hence the two-element representation.
-- [ ] `Batch`: chunked `sendmsg` at netlink-message boundaries within a single
-      BATCH_BEGIN/END, so a transaction larger than ~256KB sends without
-      EMSGSIZE while remaining atomic (currently `send()` pushes one datagram).
-- [ ] Make the recv/ack path reusable (expose `recv_and_process` /
-      `socket_close_wrapper`, or add a `send_large()` on `Batch`) so a chunked
-      sender doesn't need crate-internal access.
+- [x] `Batch::send()`: large atomic transactions (hundreds of thousands of set
+      elements) failed with EMSGSIZE because a netfilter batch must reach the
+      kernel as one datagram and `netlink_sendmsg()` rejects datagrams larger
+      than `sk_sndbuf - 32`. Raise the send buffer to fit the batch via
+      `SndBufForce` (bypasses net.core.wmem_max; needs CAP_NET_ADMIN, which
+      ruleset mutation already requires). A ~8MB / 400k-element single-transaction
+      flush+refill now commits atomically. Verified against a 6.x kernel.
+- [x] ~~Expose the recv/ack path for an external chunked sender~~ — not needed:
+      the fix lives inside `Batch::send()`, which already has crate-internal recv
+      access. No public API change required.
