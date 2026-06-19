@@ -1,3 +1,7 @@
+// Fork change 2026-06-19: SetElement gains key_end / timeout / expiration so
+// interval (CIDR-range) and per-element-timeout sets can be managed; SetBuilder
+// gains add methods for those. See FORK-CHANGES.md.
+
 use rustables_macros::nfnetlink_struct;
 
 use crate::data_type::DataType;
@@ -5,10 +9,11 @@ use crate::error::BuilderError;
 use crate::nlmsg::NfNetlinkObject;
 use crate::parser_impls::{NfNetlinkData, NfNetlinkList};
 use crate::sys::{
-    NFTA_SET_ELEM_KEY, NFTA_SET_ELEM_LIST_ELEMENTS, NFTA_SET_ELEM_LIST_SET,
-    NFTA_SET_ELEM_LIST_TABLE, NFTA_SET_FLAGS, NFTA_SET_ID, NFTA_SET_KEY_LEN, NFTA_SET_KEY_TYPE,
+    NFTA_SET_ELEM_EXPIRATION, NFTA_SET_ELEM_FLAGS, NFTA_SET_ELEM_KEY, NFTA_SET_ELEM_KEY_END,
+    NFTA_SET_ELEM_LIST_ELEMENTS, NFTA_SET_ELEM_LIST_SET, NFTA_SET_ELEM_LIST_TABLE,
+    NFTA_SET_ELEM_TIMEOUT, NFTA_SET_FLAGS, NFTA_SET_ID, NFTA_SET_KEY_LEN, NFTA_SET_KEY_TYPE,
     NFTA_SET_NAME, NFTA_SET_TABLE, NFTA_SET_USERDATA, NFT_MSG_DELSET, NFT_MSG_DELSETELEM,
-    NFT_MSG_NEWSET, NFT_MSG_NEWSETELEM,
+    NFT_MSG_NEWSET, NFT_MSG_NEWSETELEM, NFT_SET_ELEM_INTERVAL_END,
 };
 use crate::table::Table;
 use crate::ProtocolFamily;
@@ -77,9 +82,42 @@ impl<K: DataType> SetBuilder<K> {
     }
 
     pub fn add(&mut self, key: &K) {
-        self.list.elements.as_mut().unwrap().add_value(SetElement {
+        self.push(SetElement {
             key: Some(NfNetlinkData::default().with_value(key.data())),
+            ..Default::default()
         });
+    }
+
+    /// Add a single key with a per-element timeout (milliseconds). The set must
+    /// have been created with `flags timeout`.
+    pub fn add_with_timeout(&mut self, key: &K, timeout_ms: u64) {
+        self.push(SetElement {
+            key: Some(NfNetlinkData::default().with_value(key.data())),
+            timeout: Some(timeout_ms),
+            ..Default::default()
+        });
+    }
+
+    /// Add a half-open interval `[start, end_exclusive)` to an rbtree `interval`
+    /// set, as the kernel represents it: a start boundary carrying the optional
+    /// timeout, plus an end boundary flagged INTERVAL_END. For a CIDR this is
+    /// `start = network`, `end_exclusive = broadcast + 1`. The set must have
+    /// `flags interval` (and `flags timeout` for a timeout).
+    pub fn add_interval(&mut self, start: &K, end_exclusive: &K, timeout_ms: Option<u64>) {
+        self.push(SetElement {
+            key: Some(NfNetlinkData::default().with_value(start.data())),
+            timeout: timeout_ms,
+            ..Default::default()
+        });
+        self.push(SetElement {
+            key: Some(NfNetlinkData::default().with_value(end_exclusive.data())),
+            flags: Some(NFT_SET_ELEM_INTERVAL_END as u32),
+            ..Default::default()
+        });
+    }
+
+    fn push(&mut self, elem: SetElement) {
+        self.list.elements.as_mut().unwrap().add_value(elem);
     }
 
     pub fn finish(self) -> (Set, SetElementList) {
@@ -117,6 +155,22 @@ impl NfNetlinkObject for SetElementList {
 pub struct SetElement {
     #[field(NFTA_SET_ELEM_KEY)]
     pub key: NfNetlinkData,
+    /// Single-element inclusive range end (NFTA_SET_ELEM_KEY_END). Accepted by
+    /// concat/pipapo sets only — rbtree interval sets instead use the half-open
+    /// two-element form (see `flags` / `SetBuilder::add_interval`).
+    #[field(NFTA_SET_ELEM_KEY_END)]
+    pub key_end: NfNetlinkData,
+    /// Element flags, e.g. NFT_SET_ELEM_INTERVAL_END to mark the end boundary of
+    /// a half-open interval in an rbtree `interval` set.
+    #[field(NFTA_SET_ELEM_FLAGS)]
+    pub flags: u32,
+    /// Per-element timeout in milliseconds (sets with `flags timeout`).
+    #[field(NFTA_SET_ELEM_TIMEOUT)]
+    pub timeout: u64,
+    /// Remaining time in milliseconds before expiry; reported by the kernel on
+    /// dump (read-only — don't set it when adding).
+    #[field(NFTA_SET_ELEM_EXPIRATION)]
+    pub expiration: u64,
 }
 
 type SetElementListElements = NfNetlinkList<SetElement>;
